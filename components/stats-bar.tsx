@@ -74,12 +74,20 @@ export function StatsBar({
             accent="success"
           />
         </div>
-        <Link
-          href="/inventario"
-          className="rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          Carga de Inventario
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/historial"
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            Historial de Caja
+          </Link>
+          <Link
+            href="/inventario"
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            Carga de Inventario
+          </Link>
+        </div>
       </div>
     </header>
   )
