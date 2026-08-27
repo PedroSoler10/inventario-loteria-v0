@@ -4,7 +4,7 @@ export type LotteryEntry = {
   vendidos: number
 }
 
-// Serie = 10 billetes. Datos simulados del sorteo actual.
+/** Datos de demostración para el panel BI. El mostrador usa la tabla `inventario`. */
 const SEED_NUMBERS = [
   '00007', '01234', '02580', '04815', '05555', '07777', '10101', '11111',
   '12345', '13000', '14785', '15987', '18200', '19999', '21212', '23456',

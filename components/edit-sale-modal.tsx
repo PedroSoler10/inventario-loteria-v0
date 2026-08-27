@@ -7,11 +7,12 @@ import { accionLabel, PRECIO_DECIMO, type Sale } from '@/lib/sales-history'
 
 type EditSaleModalProps = {
   sale: Sale
+  saving?: boolean
   onClose: () => void
-  onSave: (patch: { numero: string; decimos: number }) => void
+  onSave: (patch: { numero: string; decimos: number }) => void | Promise<void>
 }
 
-export function EditSaleModal({ sale, onClose, onSave }: EditSaleModalProps) {
+export function EditSaleModal({ sale, saving = false, onClose, onSave }: EditSaleModalProps) {
   const [numero, setNumero] = useState(sale.numero)
   const [decimos, setDecimos] = useState(String(sale.decimos))
   const firstFieldRef = useRef<HTMLInputElement>(null)
@@ -36,10 +37,10 @@ export function EditSaleModal({ sale, onClose, onSave }: EditSaleModalProps) {
   const nuevoImporte = decimosValido ? decimosNum * PRECIO_DECIMO : 0
   const cambioImporte = nuevoImporte - sale.cantidad
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!valido) return
-    onSave({ numero, decimos: decimosNum })
+    if (!valido || saving) return
+    await onSave({ numero, decimos: decimosNum })
   }
 
   return (
@@ -68,7 +69,7 @@ export function EditSaleModal({ sale, onClose, onSave }: EditSaleModalProps) {
                 Corregir venta
               </h2>
               <p className="font-mono text-[11px] text-muted-foreground">
-                {sale.hora} · {accionLabel(sale.accion)}
+                {sale.fecha} {sale.hora} · {accionLabel(sale.accion)}
               </p>
             </div>
           </div>
@@ -171,15 +172,15 @@ export function EditSaleModal({ sale, onClose, onSave }: EditSaleModalProps) {
             </button>
             <button
               type="submit"
-              disabled={!valido}
+              disabled={!valido || saving}
               className={cn(
                 'rounded-md px-4 py-2 text-sm font-semibold transition-colors',
-                valido
+                valido && !saving
                   ? 'bg-primary text-primary-foreground hover:bg-primary/90'
                   : 'cursor-not-allowed bg-muted text-muted-foreground',
               )}
             >
-              Guardar corrección
+              {saving ? 'Guardando…' : 'Guardar corrección'}
             </button>
           </div>
         </form>

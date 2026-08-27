@@ -12,6 +12,7 @@ type ResultsTableProps = {
   rows: Row[]
   activeIndex: number
   flashing: Record<string, 'uno' | 'serie'>
+  busy?: boolean
   onSellOne: (numero: string) => void
   onSellSerie: (numero: string) => void
   onHoverRow: (index: number) => void
@@ -27,6 +28,7 @@ export function ResultsTable({
   rows,
   activeIndex,
   flashing,
+  busy = false,
   onSellOne,
   onSellSerie,
   onHoverRow,
@@ -69,7 +71,7 @@ export function ResultsTable({
             const noSerie = row.disponibles < SERIE_SIZE
             return (
               <tr
-                key={row.numero}
+                key={`${row.numero}-${row.vendidos}-${row.disponibles}`}
                 onMouseEnter={() => onHoverRow(index)}
                 className={cn(
                   'group relative transition-colors',
@@ -113,7 +115,7 @@ export function ResultsTable({
                     <button
                       type="button"
                       onClick={() => onSellOne(row.numero)}
-                      disabled={soldOut}
+                      disabled={soldOut || busy}
                       className="inline-flex w-28 items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Plus className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" />
@@ -122,7 +124,7 @@ export function ResultsTable({
                     <button
                       type="button"
                       onClick={() => onSellSerie(row.numero)}
-                      disabled={noSerie}
+                      disabled={noSerie || busy}
                       className="inline-flex w-32 items-center justify-center gap-1.5 rounded-md border border-primary/40 bg-card px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Layers className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" />

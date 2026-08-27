@@ -1,13 +1,22 @@
 'use client'
 
 import { Search } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
-import { LOTTERY_DATA, type LotteryEntry } from '@/lib/lottery-data'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  applySoldDelta,
+  fetchNumberEntry,
+  filterInventory,
+  loadInventoryCatalog,
+  sellTickets,
+  subscribeInventory,
+  totalsFromEntries,
+  type FilterMode,
+  type InventoryTotals,
+} from '@/lib/inventory'
+import type { LotteryEntry } from '@/lib/lottery-data'
 import { cn } from '@/lib/utils'
 import { ResultsTable, SERIE_SIZE } from './results-table'
 import { StatsBar } from './stats-bar'
-
-type FilterMode = 'exacto' | 'termina' | 'empieza' | 'contiene'
 
 const FILTERS: { value: FilterMode; label: string }[] = [
   { value: 'exacto', label: 'Exacto' },
@@ -16,49 +25,78 @@ const FILTERS: { value: FilterMode; label: string }[] = [
   { value: 'contiene', label: 'Contiene' },
 ]
 
+const EMPTY_TOTALS: InventoryTotals = {
+  totalInicial: 0,
+  totalVendidos: 0,
+  totalDisponibles: 0,
+  numeros: 0,
+}
+
+function mergeEntry(catalog: LotteryEntry[], entry: LotteryEntry) {
+  const exists = catalog.some((item) => item.numero === entry.numero)
+  const next = exists
+    ? catalog.map((item) => (item.numero === entry.numero ? entry : item))
+    : [...catalog, entry]
+  return next.sort((a, b) => a.numero.localeCompare(b.numero))
+}
+
 export function LotteryTerminal() {
-  const [entries, setEntries] = useState<LotteryEntry[]>(LOTTERY_DATA)
+  const [catalog, setCatalog] = useState<LotteryEntry[]>([])
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<FilterMode>('contiene')
   const [activeIndex, setActiveIndex] = useState(0)
   const [flashing, setFlashing] = useState<Record<string, 'uno' | 'serie'>>({})
+  const [loading, setLoading] = useState(true)
+  const [selling, setSelling] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const searchRef = useRef<HTMLInputElement>(null)
   const flashTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const reloadGen = useRef(0)
 
   const focusSearch = () => searchRef.current?.focus()
 
-  const rows = useMemo(() => {
-    const q = query.trim()
-    const filtered = entries.filter((e) => {
-      if (!q) return true
-      switch (mode) {
-        case 'exacto':
-          return e.numero === q
-        case 'termina':
-          return e.numero.endsWith(q)
-        case 'empieza':
-          return e.numero.startsWith(q)
-        case 'contiene':
-          return e.numero.includes(q)
-      }
-    })
-    return filtered.map((e) => ({
-      ...e,
-      disponibles: e.stockInicial - e.vendidos,
-    }))
-  }, [entries, query, mode])
-
-  const totals = useMemo(() => {
-    const totalInicial = entries.reduce((s, e) => s + e.stockInicial, 0)
-    const totalVendidos = entries.reduce((s, e) => s + e.vendidos, 0)
-    return {
-      totalInicial,
-      totalVendidos,
-      totalDisponibles: totalInicial - totalVendidos,
-      numeros: entries.length,
+  const reloadCatalog = useCallback(async (silent = false) => {
+    const gen = ++reloadGen.current
+    if (!silent) setLoading(true)
+    try {
+      const next = await loadInventoryCatalog()
+      if (reloadGen.current !== gen) return
+      setCatalog(next)
+      setError(null)
+    } catch (err) {
+      if (reloadGen.current !== gen) return
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo consultar el inventario.',
+      )
+    } finally {
+      if (reloadGen.current === gen) setLoading(false)
     }
-  }, [entries])
+  }, [])
+
+  useEffect(() => {
+    void reloadCatalog()
+  }, [reloadCatalog])
+
+  useEffect(() => {
+    return subscribeInventory(() => {
+      void reloadCatalog(true)
+    })
+  }, [reloadCatalog])
+
+  const rows = useMemo(() => {
+    return filterInventory(catalog, query, mode).map((entry) => ({
+      ...entry,
+      disponibles: Math.max(0, entry.stockInicial - entry.vendidos),
+    }))
+  }, [catalog, query, mode])
+
+  const totals = useMemo(
+    () => (catalog.length === 0 ? EMPTY_TOTALS : totalsFromEntries(catalog)),
+    [catalog],
+  )
 
   const flashRow = (numero: string, kind: 'uno' | 'serie') => {
     if (flashTimers.current[numero]) clearTimeout(flashTimers.current[numero])
@@ -72,21 +110,47 @@ export function LotteryTerminal() {
     }, 1000)
   }
 
-  const sell = (numero: string, amount: number, kind: 'uno' | 'serie') => {
-    let didSell = false
-    setEntries((prev) =>
-      prev.map((e) => {
-        if (e.numero !== numero) return e
-        const disponibles = e.stockInicial - e.vendidos
-        const qty = Math.min(amount, disponibles)
-        if (qty <= 0) return e
-        didSell = true
-        return { ...e, vendidos: e.vendidos + qty }
-      }),
-    )
-    if (didSell) flashRow(numero, kind)
-    // El foco siempre vuelve a la barra de búsqueda tras una acción.
-    requestAnimationFrame(focusSearch)
+  const sell = async (numero: string, amount: number, kind: 'uno' | 'serie') => {
+    if (selling) return
+    const current = catalog.find((e) => e.numero === numero)
+    const disponibles = current
+      ? current.stockInicial - current.vendidos
+      : 0
+    const qty = Math.min(amount, disponibles)
+    if (qty <= 0) {
+      requestAnimationFrame(focusSearch)
+      return
+    }
+
+    setSelling(true)
+    setCatalog((prev) => applySoldDelta(prev, numero, qty))
+
+    try {
+      const { sold } = await sellTickets(numero, qty, kind)
+      if (sold <= 0) {
+        setCatalog((prev) => applySoldDelta(prev, numero, -qty))
+        return
+      }
+      if (sold !== qty) {
+        setCatalog((prev) => applySoldDelta(prev, numero, sold - qty))
+      }
+      const fresh = await fetchNumberEntry(numero)
+      if (fresh) {
+        setCatalog((prev) => mergeEntry(prev, fresh))
+      }
+      flashRow(numero, kind)
+      setError(null)
+    } catch (err) {
+      setCatalog((prev) => applySoldDelta(prev, numero, -qty))
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo registrar la venta.',
+      )
+    } finally {
+      setSelling(false)
+      requestAnimationFrame(focusSearch)
+    }
   }
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -104,11 +168,10 @@ export function LotteryTerminal() {
     if (e.key === 'Enter') {
       e.preventDefault()
       const target = rows[activeIndex] ?? rows[0]
-      if (target) sell(target.numero, 1, 'uno')
+      if (target) void sell(target.numero, 1, 'uno')
     }
   }
 
-  // Mantener el índice activo dentro de rango al cambiar la búsqueda.
   const safeActiveIndex = Math.min(activeIndex, Math.max(0, rows.length - 1))
 
   return (
@@ -173,22 +236,36 @@ export function LotteryTerminal() {
         </div>
       </section>
 
-      <ResultsTable
-        rows={rows}
-        activeIndex={safeActiveIndex}
-        flashing={flashing}
-        onSellOne={(numero) => sell(numero, 1, 'uno')}
-        onSellSerie={(numero) => sell(numero, SERIE_SIZE, 'serie')}
-        onHoverRow={setActiveIndex}
-      />
+      {error ? (
+        <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      {loading && catalog.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          Consultando inventario…
+        </div>
+      ) : (
+        <ResultsTable
+          rows={rows}
+          activeIndex={safeActiveIndex}
+          flashing={flashing}
+          busy={selling}
+          onSellOne={(numero) => void sell(numero, 1, 'uno')}
+          onSellSerie={(numero) => void sell(numero, SERIE_SIZE, 'serie')}
+          onHoverRow={setActiveIndex}
+        />
+      )}
 
       <footer className="flex items-center justify-between border-t border-border bg-card px-5 py-1.5 text-[11px] text-muted-foreground">
         <span>
+          {loading ? 'Sincronizando… · ' : ''}
           {rows.length.toLocaleString('es-ES')} resultado
           {rows.length === 1 ? '' : 's'}
           {query ? ` · filtro: ${FILTERS.find((f) => f.value === mode)?.label}` : ''}
         </span>
-        <span>Serie = {SERIE_SIZE} billetes</span>
+        <span>Serie = {SERIE_SIZE} décimos</span>
       </footer>
     </main>
   )
